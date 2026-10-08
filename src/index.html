@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>SHIFT//CIPHER — EVM 私钥混淆器</title>
+<style>
+  :root {
+    --bg: #0c0a07;
+    --panel: #12100b;
+    --line: #3a2f18;
+    --line-bright: #6b5424;
+    --amber: #ffb000;
+    --amber-dim: #b87d00;
+    --amber-faint: rgba(255, 176, 0, 0.08);
+    --text: #e8d5a3;
+    --text-dim: #8a7a52;
+    --danger: #ff4b3a;
+    --mono: "Cascadia Code", "JetBrains Mono", "Fira Code", "IBM Plex Mono", Consolas, "Courier New", monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 48px 20px 80px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* 扫描线 + 暗角，营造 CRT 磷光屏氛围 */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 2px,
+      rgba(0, 0, 0, 0.18) 3px,
+      transparent 4px
+    );
+    pointer-events: none;
+    z-index: 10;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+    pointer-events: none;
+    z-index: 11;
+  }
+
+  .machine {
+    width: 100%;
+    max-width: 720px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── 机头 ─────────────────────────── */
+  .head {
+    border: 1px solid var(--line-bright);
+    background: var(--panel);
+    padding: 22px 26px 18px;
+    position: relative;
+    animation: reveal 0.5s ease-out both;
+  }
+  /* 四角铆钉装饰 */
+  .head::before, .head::after,
+  .foot::before, .foot::after {
+    content: "";
+    position: absolute;
+    width: 6px; height: 6px;
+    background: var(--amber-dim);
+  }
+  .head::before { top: -3px; left: -3px; }
+  .head::after  { top: -3px; right: -3px; }
+
+  .head .model {
+    font-size: 11px;
+    letter-spacing: 0.35em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+  .head h1 {
+    font-size: clamp(26px, 5vw, 38px);
+    letter-spacing: 0.12em;
+    color: var(--amber);
+    font-weight: 700;
+    margin: 6px 0 4px;
+    text-shadow: 0 0 18px rgba(255, 176, 0, 0.35);
+  }
+  .head h1 .slash { color: var(--amber-dim); }
+  .head .sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+  }
+
+  .head .status {
+    margin-top: 14px;
+    border-top: 1px dashed var(--line);
+    padding-top: 10px;
+    font-size: 11px;
+    color: var(--amber-dim);
+    letter-spacing: 0.15em;
+  }
+  .head .status .cursor {
+    display: inline-block;
+    width: 7px; height: 13px;
+    background: var(--amber);
+    vertical-align: -2px;
+    margin-left: 6px;
+    animation: blink 1.1s steps(1) infinite;
+  }
+  .head .status.err { color: var(--danger); }
+  .head .status.ok { color: var(--amber); }
+
+  /* ── 机身 ─────────────────────────── */
+  .console {
+    border: 1px solid var(--line-bright);
+    border-top: none;
+    background: var(--panel);
+    padding: 26px;
+    animation: reveal 0.5s ease-out 0.12s both;
+  }
+
+  .field-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    letter-spacing: 0.25em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .field-label .fmt { letter-spacing: 0.05em; text-transform: none; }
+
+  .key-row { position: relative; }
+
+  input#key, .decrypt-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--amber);
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.06em;
+    padding: 14px 46px 14px 14px;
+    outline: none;
+    caret-color: var(--amber);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    word-break: break-all;
+  }
+  input#key:focus, .decrypt-input:focus {
+    border-color: var(--amber-dim);
+    box-shadow: inset 0 0 24px var(--amber-faint), 0 0 0 1px var(--amber-faint);
+  }
+  input#key.invalid, .decrypt-input.invalid { border-color: var(--danger); }
+  .decrypt-input { padding: 14px; resize: vertical; }
+  .module-title { color: var(--amber); font-size: 16px; letter-spacing: 0.15em; margin-bottom: 12px; }
+  .module-note { color: var(--text-dim); font-size: 12px; line-height: 1.8; margin-bottom: 20px; }
+  .target-field { margin-top: 18px; }
+  .address-summary { font-size: 12px; line-height: 1.8; margin-bottom: 12px; }
+  .address-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px dashed var(--line); }
+  .address-row code { flex: 1; min-width: 0; word-break: break-all; font-family: var(--mono); font-size: 13px; line-height: 1.8; color: var(--amber); user-select: all; }
+  .address-row button { flex-shrink: 0; padding: 10px; }
+
+  .toggle-vis {
+    position: absolute;
+    right: 8px; top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 6px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1;
+  }
+  .toggle-vis:hover { color: var(--amber); }
+
+  .actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+
+  button.primary {
+    flex: 1;
+    min-width: 180px;
+    background: var(--amber);
+    color: #191200;
+    border: 1px solid var(--amber);
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    padding: 14px 20px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+  }
+  button.primary:hover {
+    background: transparent;
+    color: var(--amber);
+    box-shadow: 0 0 22px rgba(255, 176, 0, 0.25);
+  }
+  button.primary:active { transform: translateY(1px); }
+
+  button.ghost {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    padding: 14px 20px;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  button.ghost:hover { color: var(--text); border-color: var(--line-bright); }
+
+  /* ── 输出 ─────────────────────────── */
+  .output-wrap {
+    margin-top: 26px;
+    display: none;
+  }
+  .output-wrap.show { display: block; animation: reveal 0.4s ease-out both; }
+
+  .output-box {
+    position: relative;
+    background: var(--bg);
+    border: 1px solid var(--line-bright);
+    padding: 16px 16px 14px;
+  }
+  .output-box .tag {
+    position: absolute;
+    top: -9px; left: 12px;
+    background: var(--panel);
+    color: var(--amber);
+    font-size: 10px;
+    letter-spacing: 0.3em;
+    padding: 0 8px;
+  }
+  #cipher-out {
+    font-size: 14px;
+    line-height: 1.9;
+    color: var(--text);
+    word-break: break-all;
+    letter-spacing: 0.05em;
+    user-select: all;
+  }
+  #cipher-out .junk { color: var(--text-dim); opacity: 0.65; }
+
+  .output-actions { display: flex; gap: 12px; margin-top: 12px; }
+
+  /* ── 规格铭牌 ─────────────────────── */
+  details.spec {
+    border: 1px solid var(--line);
+    border-top: none;
+    background: var(--panel);
+    animation: reveal 0.5s ease-out 0.24s both;
+  }
+  details.spec summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 14px 26px;
+    font-size: 11px;
+    letter-spacing: 0.25em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    transition: color 0.12s;
+    user-select: none;
+  }
+  details.spec summary:hover { color: var(--amber); }
+  details.spec summary::before { content: "▸ "; color: var(--amber-dim); }
+  details.spec[open] summary::before { content: "▾ "; }
+  details.spec .spec-body {
+    padding: 0 26px 22px;
+    font-size: 12px;
+    line-height: 2;
+    color: var(--text-dim);
+  }
+  details.spec .spec-body code {
+    color: var(--amber);
+    background: var(--amber-faint);
+    padding: 1px 6px;
+  }
+  details.spec ol { padding-left: 20px; }
+  details.spec li { margin: 4px 0; }
+
+  /* ── 机脚 ─────────────────────────── */
+  .foot {
+    border: 1px solid var(--line-bright);
+    border-top: none;
+    background: var(--panel);
+    padding: 12px 26px;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    position: relative;
+    animation: reveal 0.5s ease-out 0.36s both;
+  }
+  .foot::before { bottom: -3px; left: -3px; }
+  .foot::after  { bottom: -3px; right: -3px; }
+  .foot .lamp {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 8px var(--amber);
+    margin-right: 8px;
+    animation: blink 2.4s ease-in-out infinite;
+  }
+
+  @keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0.15; } }
+  @keyframes reveal {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 560px) {
+    .console, .foot { padding-left: 16px; padding-right: 16px; }
+    .head { padding: 18px 16px 14px; }
+    details.spec summary { padding: 14px 16px; }
+    details.spec .spec-body { padding: 0 16px 18px; }
+  }
+</style>
+</head>
+<body>
+
+<main class="machine">
+
+  <header class="head">
+    <div class="model">CIPHER UNIT / Z-36</div>
+    <h1>SHIFT<span class="slash">//</span>CIPHER</h1>
+    <div class="sub">EVM 私钥混淆器 — 写入 .env 前的位移加密</div>
+    <div class="status" id="status">AWAITING KEY<span class="cursor"></span></div>
+  </header>
+
+  <section class="console">
+    <div class="field-label">
+      <label for="key">PRIVATE KEY 输入</label>
+      <span class="fmt">64位十六进制，0x 可选</span>
+    </div>
+    <div class="key-row">
+      <input
+        id="key"
+        type="password"
+        spellcheck="false"
+        autocomplete="off"
+        autocapitalize="off"
+        placeholder="0x•••••••••••••••••••••••••••••••••"
+        aria-label="EVM 私钥"
+      >
+      <button class="toggle-vis" id="toggle-vis" type="button" title="显示 / 隐藏" aria-label="显示或隐藏私钥">◉</button>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="encrypt-btn" type="button">加 密 ENCRYPT</button>
+      <button class="ghost" id="clear-btn" type="button">清 除</button>
+    </div>
+
+    <div class="output-wrap" id="output-wrap">
+      <div class="output-box">
+        <span class="tag">CIPHERTEXT 密文</span>
+        <div id="cipher-out" aria-live="polite"></div>
+      </div>
+      <div class="output-actions">
+        <button class="ghost" id="copy-btn" type="button">复 制 密 文</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="console" aria-labelledby="decrypt-title">
+    <h2 class="module-title" id="decrypt-title">解密为地址 DECRYPT</h2>
+    <p class="module-note" id="decrypt-note">粘贴本工具生成的密文，推导候选 EVM 地址。密文未保存位移值，可能对应多个地址；填写目标地址可核对唯一匹配。仅显示地址。</p>
+    <div class="field-label">
+      <label for="decrypt-cipher">CIPHERTEXT 密文输入</label>
+    </div>
+    <textarea class="decrypt-input" id="decrypt-cipher" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="粘贴密文，保留原始大小写" aria-describedby="decrypt-note"></textarea>
+    <div class="target-field">
+      <div class="field-label">
+        <label for="target-address">目标地址（可选）</label>
+        <span class="fmt">0x + 40 位十六进制</span>
+      </div>
+      <input class="decrypt-input" id="target-address" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="0x…">
+    </div>
+    <div class="actions">
+      <button class="primary" id="decrypt-btn" type="button">解密为地址</button>
+      <button class="ghost" id="use-cipher-btn" type="button">填入刚生成的密文</button>
+      <button class="ghost" id="decrypt-clear-btn" type="button">清 除</button>
+    </div>
+    <div class="output-wrap" id="address-wrap">
+      <div class="output-box">
+        <span class="tag">EVM ADDRESS 地址</span>
+        <div id="address-out" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <details class="spec">
+    <summary>解密规格 — 供解密程序实现方阅读</summary>
+    <div class="spec-body">
+      <p>字符表（索引 0–35，位移对其取模）：</p>
+      <p><code>0123456789abcdefghijklmnopqrstuvwxyz</code></p>
+      <ol>
+        <li>输入校验：64 位十六进制，<code>0x</code> 前缀可选（如带则剥离）；统一转小写，仅加密 64 位本体。</li>
+        <li>随机位移 <code>k ∈ [1, 35]</code>，每个字符替换为表中 <code>(index + k) mod 36</code> 位置的字符。密文不含位移值。</li>
+        <li>随机穿插杂质字符，池为 <code>A-Z</code> 与 <code>!%^*()[]{}:,.&lt;&gt;?~</code>（已避开 <code># = $ 空格 引号 反斜杠</code> 等 .env / docker-compose 敏感字符）。</li>
+        <li>解密：删除所有不在 <code>[0-9a-z]</code> 内的字符 → 得到 64 位串 → 遍历 <code>k = 1..35</code> 反向位移 → 前缀 <code>0x</code> 得候选私钥 → 推导地址与目标地址核对，取唯一命中。</li>
+      </ol>
+    </div>
+  </details>
+
+  <footer class="foot">
+    <span><span class="lamp"></span>OFFLINE — 全程本地运算，无任何网络请求</span>
+    <span>Z-36 / SHIFT//CIPHER</span>
+  </footer>
+
+</main>
+
+<!-- 固定版本本地依赖，离线打开时也可推导地址；许可证见 vendor/ethers-LICENSE.md。 -->
+<script src="vendor/ethers-6.15.0.umd.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+  var JUNK = "ABCDEFGHIJKLMNOPQRSTUVWXYZ!%^*()[]{}:,.<>?~";
+  var KEY_RE = /^[0-9a-f]{64}$/;
+  var CURVE_ORDER = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+
+  var keyInput = document.getElementById("key");
+  var toggleBtn = document.getElementById("toggle-vis");
+  var encryptBtn = document.getElementById("encrypt-btn");
+  var clearBtn = document.getElementById("clear-btn");
+  var copyBtn = document.getElementById("copy-btn");
+  var outputWrap = document.getElementById("output-wrap");
+  var cipherOut = document.getElementById("cipher-out");
+  var statusEl = document.getElementById("status");
+  var decryptInput = document.getElementById("decrypt-cipher");
+  var targetInput = document.getElementById("target-address");
+  var addressWrap = document.getElementById("address-wrap");
+  var addressOut = document.getElementById("address-out");
+
+  var lastCipher = "";
+
+  function isValidPrivateKey(body) {
+    if (!KEY_RE.test(body)) return false;
+    var value = BigInt("0x" + body);
+    return value > 0n && value < CURVE_ORDER;
+  }
+
+  function resetAddresses() {
+    addressOut.textContent = "";
+    addressWrap.classList.remove("show");
+  }
+
+  function copyText(value, label) {
+    function done(ok) {
+      setStatus(ok ? "OK — " + label + "已复制到剪贴板" : "ERR — 复制失败，请手动选择复制", ok ? "ok" : "err");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(function () { done(true); }, function () { done(false); });
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = value;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      done(ok);
+    }
+  }
+
+  function runDecrypt() {
+    resetAddresses();
+    decryptInput.classList.remove("invalid");
+    targetInput.classList.remove("invalid");
+    // 大写字母属于杂质，必须先按原始大小写过滤，不能转小写。
+    var body = decryptInput.value.replace(/[^0-9a-z]/g, "");
+    if (body.length !== 64) {
+      decryptInput.classList.add("invalid");
+      setStatus("ERR — 去除杂质后需为 64 位密文（当前 " + body.length + " 位）", "err");
+      return;
+    }
+    var target = targetInput.value.trim();
+    if (target && !/^0x[0-9a-fA-F]{40}$/i.test(target)) {
+      targetInput.classList.add("invalid");
+      setStatus("ERR — 目标地址需为 0x + 40 位十六进制", "err");
+      return;
+    }
+    if (typeof ethers === "undefined") {
+      setStatus("ERR — 本地地址计算库未加载，请检查 vendor 文件是否完整", "err");
+      return;
+    }
+    var candidates = [];
+    try {
+      for (var shift = 1; shift <= 35; shift++) {
+        var key = "";
+        for (var i = 0; i < body.length; i++) {
+          key += ALPHABET[(ALPHABET.indexOf(body[i]) - shift + 36) % 36];
+        }
+        if (!isValidPrivateKey(key)) continue;
+        var address = ethers.computeAddress("0x" + key);
+        if (!target || address.toLowerCase() === target.toLowerCase()) candidates.push(address);
+      }
+    } catch (e) {
+      setStatus("ERR — 地址推导失败，请检查密文并重试", "err");
+      return;
+    }
+    if (!candidates.length) {
+      setStatus(target ? "ERR — 未找到与目标地址匹配的候选，请核对密文和地址" : "ERR — 密文无法还原为有效 EVM 私钥", "err");
+      return;
+    }
+    var summary = document.createElement("p");
+    summary.className = "address-summary";
+    summary.textContent = target ? "已匹配目标地址。" : candidates.length === 1 ? "找到 1 个有效候选地址；请与已知地址核对。" : "找到 " + candidates.length + " 个候选地址，无法仅凭密文确定原地址；可填写目标地址后再次解密。";
+    addressOut.appendChild(summary);
+    candidates.forEach(function (address) {
+      var row = document.createElement("div");
+      row.className = "address-row";
+      var code = document.createElement("code");
+      code.textContent = address;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost";
+      button.textContent = "复制";
+      button.setAttribute("aria-label", "复制地址 " + address);
+      button.addEventListener("click", function () { copyText(address, "地址"); });
+      row.appendChild(code);
+      row.appendChild(button);
+      addressOut.appendChild(row);
+    });
+    addressWrap.classList.add("show");
+    setStatus(target ? "OK — 已匹配目标地址" : "OK — 已推导 " + candidates.length + " 个候选地址", "ok");
+  }
+
+  document.getElementById("decrypt-btn").addEventListener("click", runDecrypt);
+  document.getElementById("use-cipher-btn").addEventListener("click", function () {
+    if (!lastCipher) {
+      setStatus("ERR — 请先生成密文", "err");
+      return;
+    }
+    decryptInput.value = lastCipher;
+    decryptInput.classList.remove("invalid");
+    resetAddresses();
+    setStatus("已填入密文，请点击解密为地址", "");
+    decryptInput.focus();
+  });
+  document.getElementById("decrypt-clear-btn").addEventListener("click", function () {
+    decryptInput.value = "";
+    targetInput.value = "";
+    decryptInput.classList.remove("invalid");
+    targetInput.classList.remove("invalid");
+    resetAddresses();
+    setStatus("AWAITING CIPHERTEXT", "");
+    decryptInput.focus();
+  });
+  [decryptInput, targetInput].forEach(function (input) {
+    input.addEventListener("input", function () {
+      input.classList.remove("invalid");
+      resetAddresses();
+      setStatus("AWAITING CIPHERTEXT", "");
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && (input === targetInput || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        runDecrypt();
+      }
+    });
+  });
+
+  function setStatus(text, cls) {
+    statusEl.className = "status" + (cls ? " " + cls : "");
+    statusEl.textContent = text;
+    if (!cls) {
+      var c = document.createElement("span");
+      c.className = "cursor";
+      statusEl.appendChild(c);
+    }
+  }
+
+  // crypto 随机整数 [min, max]，拒绝采样消除模偏
+  function randInt(min, max) {
+    var range = max - min + 1;
+    var buf = new Uint32Array(1);
+    var limit = Math.floor(4294967296 / range) * range;
+    do {
+      crypto.getRandomValues(buf);
+    } while (buf[0] >= limit);
+    return min + (buf[0] % range);
+  }
+
+  function encrypt(body) {
+    var shift = randInt(1, 35);
+    var shifted = "";
+    for (var i = 0; i < body.length; i++) {
+      shifted += ALPHABET[(ALPHABET.indexOf(body[i]) + shift) % 36];
+    }
+    // 随机穿插杂质：数量随机、位置随机（可出现在任意位置）
+    var out = shifted;
+    var junkCount = randInt(12, 26);
+    for (var j = 0; j < junkCount; j++) {
+      var pos = randInt(0, out.length);
+      out = out.slice(0, pos) + JUNK[randInt(0, JUNK.length - 1)] + out.slice(pos);
+    }
+    return out;
+  }
+
+  function run() {
+    var raw = keyInput.value.trim().toLowerCase().replace(/^0x/, "");
+
+    if (!KEY_RE.test(raw)) {
+      keyInput.classList.add("invalid");
+      outputWrap.classList.remove("show");
+      lastCipher = "";
+      setStatus("ERR — 非法格式：需 64 位十六进制，0x 前缀可选（当前输入 " + raw.length + " 位）", "err");
+      return;
+    }
+
+    keyInput.classList.remove("invalid");
+    if (!isValidPrivateKey(raw)) {
+      keyInput.classList.add("invalid");
+      outputWrap.classList.remove("show");
+      lastCipher = "";
+      setStatus("ERR — 私钥必须大于 0 且小于 secp256k1 曲线阶", "err");
+      return;
+    }
+    var body = raw;
+    var cipher = encrypt(body);
+    lastCipher = cipher;
+
+    // 渲染：本体字符高亮，杂质字符暗色
+    cipherOut.textContent = "";
+    for (var i = 0; i < cipher.length; i++) {
+      var span = document.createElement("span");
+      var ch = cipher[i];
+      span.textContent = ch;
+      if (ALPHABET.indexOf(ch) === -1) span.className = "junk";
+      cipherOut.appendChild(span);
+    }
+
+    outputWrap.classList.add("show");
+    setStatus("OK — 已加密，位移值不显示、不存储", "ok");
+  }
+
+  toggleBtn.addEventListener("click", function () {
+    var hidden = keyInput.type === "password";
+    keyInput.type = hidden ? "text" : "password";
+    toggleBtn.textContent = hidden ? "◌" : "◉";
+    keyInput.focus();
+  });
+
+  encryptBtn.addEventListener("click", run);
+  keyInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") run();
+  });
+  keyInput.addEventListener("input", function () {
+    keyInput.classList.remove("invalid");
+    if (keyInput.value.trim() === "") setStatus("AWAITING KEY", "");
+  });
+
+  clearBtn.addEventListener("click", function () {
+    keyInput.value = "";
+    keyInput.type = "password";
+    toggleBtn.textContent = "◉";
+    keyInput.classList.remove("invalid");
+    outputWrap.classList.remove("show");
+    lastCipher = "";
+    setStatus("AWAITING KEY", "");
+    keyInput.focus();
+  });
+
+  copyBtn.addEventListener("click", function () {
+    if (!lastCipher) return;
+    copyText(lastCipher, "密文");
+  });
+})();
+</script>
+
+</body>
+</html>
