@@ -508,7 +508,7 @@ class Transaction implements ArrayAccess
      * @return string The decoded private key with 0x prefix
      * @throws InvalidArgumentException If ciphertext is invalid or no unique match found
      */
-    public function decodePrivateKey(string $ciphertext, ?string $targetAddress = null): string
+    public static function decodePrivateKey(string $ciphertext, ?string $targetAddress = null): string
     {
         $alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
         $alphabetLen = strlen($alphabet);
@@ -527,6 +527,10 @@ class Transaction implements ArrayAccess
             }
             $targetAddress = strtolower($targetAddress);
         }
+
+        // Create dependencies locally for static method
+        $secp256k1 = new \Elliptic\EC('secp256k1');
+        $util = new \Web3p\EthereumUtil\Util();
 
         $candidates = [];
 
@@ -568,9 +572,9 @@ class Transaction implements ArrayAccess
 
             // Derive address from private key
             try {
-                $ecPrivateKey = $this->secp256k1->keyFromPrivate($key, 'hex');
+                $ecPrivateKey = $secp256k1->keyFromPrivate($key, 'hex');
                 $publicKey = $ecPrivateKey->getPublic(false, 'hex');
-                $address = '0x' . substr($this->util->sha3(substr(hex2bin($publicKey), 1)), 24);
+                $address = '0x' . substr($util->sha3(substr(hex2bin($publicKey), 1)), 24);
                 $address = strtolower($address);
 
                 if ($targetAddress === null || $address === $targetAddress) {
